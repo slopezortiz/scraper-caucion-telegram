@@ -1,18 +1,50 @@
-
 import os
+import re
 import requests
 from bs4 import BeautifulSoup
 
+ROW_RE = re.compile(
+    r"""
+    (?P<plazo>\b\d+\b)\s+
+    (?P<moneda>PESOS|DOLARES|DÓLARES)\s+
+    (?P<monto_contado>[\d\.\,]+)\s+
+    (?P<monto_futuro>[\d\.\,]+)\s+
+    (?P<tasa>[\d\,]+)\s*%\s+
+    (?P<fecha>\d{1,2}/\d{1,2}/\d{4})\s+
+    (?P<hora>\d{2}:\d{2}:\d{2})
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
 def fetch_page(url: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0 scraper-bot/1.0"}
-    r = requests.get(url, headers=headers, timeout=20)
+    r = requests.get(url, headers=headers, timeout=25)
     r.raise_for_status()
     return r.text
 
-def extract_value(html: str) -> str:
+def extract_first_line(html: str) -> str:
+    """
+    Devuelve SOLO la primer fila válida de cauciones (prioriza PESOS).
+    """
     soup = BeautifulSoup(html, "lxml")
-    title = soup.title.get_text(strip=True) if soup.title else "SIN_TITULO"
-    return title
+    text = soup.get_text("\n", strip=True)
+
+    rows = []
+    for m in ROW_RE.finditer(text):
+        plazo = m.group("plazo")
+        moneda = m.group("moneda").upper().replace("DÓLARES", "DOLARES")
+        tasa = m.group("tasa")
+        fecha_hora = f'{m.group("fecha")} {m.group("hora")}'
+        rows.append((moneda, int(plazo), tasa, fecha_hora))
+
+    if not rows:
+        return "No pude leer la tabla de cauciones (cambió el HTML o hay bloqueo)"
+
+    # Priorizar PESOS y quedarnos con la primera
+    rows_sorted = sorted(rows, key=lambda x: (0 if x[0] == "PESOS" else 1, x[1]))
+    moneda, plazo, tasa, fecha_hora = rows_sorted[0]
+
+    return f"Caución {moneda} {plazo}d — {tasa}% ({fecha_hora})"
 
 def send_telegram(bot_token: str, chat_id: str, message: str) -> None:
     api = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -21,7 +53,7 @@ def send_telegram(bot_token: str, chat_id: str, message: str) -> None:
         "text": message,
         "disable_web_page_preview": True
     }
-    r = requests.post(api, json=payload, timeout=20)
+    r = requests.post(api, json=payload, timeout=25)
     r.raise_for_status()
 
 def main():
@@ -30,11 +62,8 @@ def main():
     url = os.environ["TARGET_URL"]
 
     html = fetch_page(url)
-    value = extract_value(html)
-
-    msg = f"Nuevo dato detectado:\n{value}\n{url}"
+    msg = extract_first_line(html)  # <- SOLO una línea
     send_telegram(bot_token, chat_id, msg)
 
 if __name__ == "__main__":
     main()
-

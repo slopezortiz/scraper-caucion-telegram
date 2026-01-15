@@ -1,4 +1,4 @@
-cat > main.py <<'PY'
+
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -37,4 +37,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-PY
+
